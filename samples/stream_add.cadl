@@ -1,0 +1,11 @@
+#[opcode(7'b0001011)]
+#[funct3(0x7)]
+rtype stream_add(rs1: 32, rs2: 32, funct7: 7) -> (rd: 32) {
+    let s = rs1;
+    let d = rs2;
+    let n = funct7;
+    for (var i = 0; i < n; i = i + 1) {
+        mem[d] = mem[s] + mem[s + 4];
+        s = s + 8; d = d + 4;
+    }
+}

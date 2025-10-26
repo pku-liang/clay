@@ -1,0 +1,6 @@
+[submodule "chipyard"]
+	path = chipyard
+	url = https://github.com/pku-liang/clay-chipyard
+[submodule "cmt2"]
+	path = cmt2
+	url = https://github.com/uv-xiao/cmt2

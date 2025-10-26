@@ -1,0 +1,27 @@
+#[opcode(7'b0101011)]
+#[funct3(0x7)]
+rtype cordic_sin(rs1: 32, rs2: 32) -> (rd: 32) {
+    let z = rs1;
+    let x = 19898;
+    let y = 0;
+    #[unroll]
+    for it in (0:8) {
+        let x_ = x;
+        let y_ = y;
+        let z_neg = z[31:31];
+        let theta = match it {
+            0 => 1474560,
+            1 => 870484,
+            2 => 459940,
+            3 => 233473,
+            4 => 117189,
+            5 => 58652,
+            6 => 29333,
+            7 => 14667,
+        };
+        x = if z_neg {x_ + (y_ >> it)} else {x_ - (y_ >> it)};
+        y = if z_neg {y_ - (x_ >> it)} else {y_ + (x_ >> it)};
+        z = if z_neg {z + theta} else {z - theta};
+    }
+    rd = y;
+}

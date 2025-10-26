@@ -1,0 +1,14 @@
+[package]
+name = "clay"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+miette = { version = "7.5.0", features = ["fancy"] }
+proc-macro2 = { version = "1.0.92", features = [
+    "span-locations",
+    "proc-macro",
+] }
+clap = { version = "4.5.5", features = ["derive"] }
+clayrs = { version = "0.1.0", path = "../clayrs" }
+cmt2 = { version = "0.2.0", path = "../../cmt2/core" }

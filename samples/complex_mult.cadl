@@ -1,0 +1,11 @@
+#[opcode(7'b0001011)]
+#[funct3(0x7)]
+rtype cplx_mult(rs1: 32, rs2: 32) -> (rd: 32) {
+    let ar = rs1[31:16];
+    let ai = rs1[15:0];
+    let br = rs2[31:16];
+    let bi = rs2[15:0];
+    let zr = ar * br - ai * bi;
+    let zi = ai * br + ar * bi;
+    rd = {zr[15:0], zi[15:0]};
+}

@@ -1,0 +1,7 @@
+#[opcode(7'b0001011)]
+#[funct3(0x7)]
+rtype autoinc(rs1: 32, rs2: 32) -> (rd: 32) {
+    state addr;
+    addr = if rs2 == 0 {addr + 4} else {rs1};
+    rd = mem[addr];
+}

@@ -1,0 +1,308 @@
+use super::*;
+use std::str::FromStr;
+use crate::ast::lexer::{Token, SpannedLexicalError};
+use crate::ast::*;
+use num_traits::cast::ToPrimitive;
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = SpannedLexicalError;
+
+    enum Token {
+        "var" => Token::Var,
+        "rtype" => Token::RType,
+        "mod" => Token::Mod,
+        "flow" => Token::Flow,
+        "let" => Token::Let,
+        "if" => Token::If,
+        "else" => Token::Else,
+        "while" => Token::While,
+        "for" => Token::For,
+        "in" => Token::In,
+        "return" => Token::Return,
+        "break" => Token::Break,
+        "continue" => Token::Continue,
+        "match" => Token::Match,
+        "true" => Token::True,
+        "false" => Token::False,
+        "regfile" => Token::Regfile,
+        "state" => Token::State,
+        "const" => Token::Const,
+        "$signed" => Token::SignedCast,
+        "$unsigned" => Token::UnsignedCast,
+        "mem" => Token::Memory,
+        "memread" => Token::MemRead,
+        "memwrite" => Token::MemWrite,
+
+        "+" => Token::Plus,
+        "-" => Token::Minus,
+        "*" => Token::Multiply,
+        "/" => Token::Divide,
+        "%" => Token::Remainder,
+        "==" => Token::Equal,
+        "!=" => Token::NotEqual,
+        "<" => Token::LessThan,
+        "<=" => Token::LessThanOrEqual,
+        ">" => Token::GreaterThan,
+        ">=" => Token::GreaterThanOrEqual,
+        "&&" => Token::And,
+        "||" => Token::Or,
+        "!" => Token::Not,
+        "&" => Token::BitAnd,
+        "|" => Token::BitOr,
+        "~" => Token::BitNot,
+        "^" => Token::BitXor,
+        "<<" => Token::LShift,
+        ">>" => Token::RShift,
+
+        "=" => Token::Assign,
+        "{" => Token::LBrace,
+        "}" => Token::RBrace,
+        "(" => Token::LParen,
+        ")" => Token::RParen,
+        "[" => Token::LBracket,
+        "]" => Token::RBracket,
+
+        "->" => Token::Arrow,
+        "=>" => Token::FatArrow,
+        "," => Token::Comma,
+        ":" => Token::Colon,
+        ";" => Token::Semicolon,
+        "@" => Token::At,
+        "#" => Token::Hash,
+
+        IdentToken => Token::Identifier(<String>),
+        NumberToken => Token::Number(<TypedLit>),
+    }
+}
+
+pub Number = NumberToken;
+pub Ident = IdentToken;
+
+// pub Expr: Box<Expr> = Number => Expr::Lit(<>).boxed();
+
+
+pub ConstStmt: (String, Box<Expr>) = "const" <ident:Ident> "=" <expr:Expr> ";" => (ident, expr);
+
+pub ForAssign: Box<Stmt> = {
+    <is_var:"var"?> <lhs:Expr> "=" <rhs:Expr> => Box::new(Stmt::Assign(is_var.map(|_| AssignKind::Var).unwrap_or(AssignKind::Update), lhs, rhs)),
+};
+
+pub Stmt: Stmt = {
+    // "const" <ident:Ident> "=" <expr:Expr> ";" => Stmt::Const(ident, expr),
+    <is_let:"let"?> <lhs:Expr> "=" <rhs:Expr> ";" => Stmt::Assign(is_let.map(|_| AssignKind::Let).unwrap_or(AssignKind::Update), lhs, rhs),
+    <expr:Expr> ";" => Stmt::Expr(expr),
+    "var" <ident:Ident> <expr:("=" <Expr>)?> ";" => Stmt::VarDecl(ident, expr),
+    "state" <ident:Ident> ";" => Stmt::State(ident),
+
+    "while" "(" <cond:Expr> ")" <body:Body> => Stmt::While(cond, body.unwrap_or_default()),
+    <attrs:Attribute*>
+    "for" <ident:Ident> "in" "(" <start:Expr> ":" <end:Expr> ")" <body:Body> => Stmt::For(attrs, ident, start, end, body.unwrap_or_default()),
+    "for" "(" <init:ForAssign?> ";" <cond:Expr?> ";" <update:ForAssign?> ")" <body:Body> => Stmt::CStyleFor(init, cond, update, body.unwrap_or_default()),
+}
+
+pub Port: Port = {
+    <name:Ident> ":" <width:Number> => Port::new(name, Type::UInt(width.value().to_u32().unwrap()))
+}
+
+#[inline]
+Comma<T>: Vec<T> = <mut v:(<T> ",")*> <e:T> => { v.push(e); v };
+
+#[inline]
+Body: Option<Vec<Stmt>> = {
+    ";" => None,
+    "{" <stmts: Stmt*> "}" => Some(stmts),
+}
+
+#[inline]
+List<T>: Vec<T> = <mut v:(<T> ",")*> <e:T> => {v.push(e); v};
+
+
+pub Module: Module = {
+    // "mod" <name:Ident> "{" <ports:Comma<Port>> "}" => Module::new(name, ports)
+    "mod" <name:Ident> "(" <inputs:Comma<Port>?> ")" "->" "(" <outputs:Comma<Port>?> ")" <body:Body> => {
+        Module {
+            name,
+            inputs: inputs.unwrap_or_default(),
+            outputs: outputs.unwrap_or_default(),
+            body
+        }
+    }
+};
+
+pub Attribute: (String, Option<Box<Expr>>) = {
+    "#" "[" <Ident> "]" => (<>, None),
+    "#" "[" <ident:Ident> "(" <expr:Expr> ")" "]" => (ident, Some(expr)),
+}
+
+pub Flow: Flow = {
+    <attrs:Attribute*>
+    "flow" <name:Ident> "(" <inputs:Comma<Port>?> ")" "@" "(" <cond:Expr> ")" <body:Body> => Flow {
+        name,
+        kind: FlowKind::Default,
+        inputs: inputs.unwrap_or_default(),
+        outputs: vec![],
+        attrs: FlowAttributes::from_tuples(attrs).with_activator(cond),
+        body
+    },
+
+    <attrs:Attribute*>
+    "rtype" <name:Ident> "(" <inputs:Comma<Port>?> ")" <outputs:("->" "(" <Comma<Port>?> ")")?> <body:Body> => Flow {
+        name,
+        kind: FlowKind::RType,
+        inputs: inputs.unwrap_or_default(),
+        outputs: outputs.unwrap_or_default().unwrap_or_default(),
+        attrs: FlowAttributes::from_tuples(attrs),
+        body
+    }
+}
+
+// pub Flow: Flow = {
+//     "flow" <name:Ident> "(" <inputs:Comma<Port>?> ")" "@" "(" <cond:Expr> ")" <body:Body> => Flow {
+//         name,
+//         inputs: inputs.unwrap_or_default(),
+//         cond,
+//         body
+//     }
+// };
+
+pub Regfile: Regfile = {
+    "regfile" <name:Ident> "(" <width:Number> "," <depth:Number> ")" ";" => Regfile {
+        name,
+        width: width.value().to_u32().unwrap(),
+        depth: depth.value().to_u32().unwrap()
+    }
+};
+
+pub Expr: Box<Expr> = {
+    #[precedence(level="0")]
+    "(" <mut list:List<ExprReset>> ")" => {
+        if list.len() == 1 {
+            list.pop().unwrap()
+        } else {
+            Expr::Tuple(list).boxed()
+        }
+    },
+    <Number> => Expr::Lit(<>).boxed(),
+    <Ident> => Expr::Ident(<>).boxed(),
+    "memread" "(" <addr:ExprReset> ")" => Expr::MemRead(addr).boxed(),
+    "memwrite" "(" <addr:ExprReset> "," <data:ExprReset> <mask:("," <ExprReset>)?> ")" => Expr::MemWrite(addr, data, mask).boxed(),
+    <id:Ident> "(" <args:List<ExprReset>> ")" => Expr::Call(id, args).boxed(),
+
+    "$signed" "(" <expr:ExprReset> ")" => Expr::Unary(UnaryOp::SignedCast, expr).boxed(),
+    "$unsigned" "(" <expr:ExprReset> ")" => Expr::Unary(UnaryOp::UnsignedCast, expr).boxed(),
+
+    #[precedence(level="1")]
+    "mem" "[" <index:ExprReset> "]" => Expr::Memory(index).boxed(),
+    <expr:Expr> "[" <index:ExprReset> "]" => Expr::Index(expr, index).boxed(),
+    <expr:Expr> "[" <begin:ExprReset> ":" <end:ExprReset> "]" => Expr::Slice(expr, begin, end).boxed(),
+    "{" <list:List<ExprReset>> "}" => Expr::Concat(list).boxed(),
+    "{" <n:Number> "{" <expr:ExprReset> "}" "}" => Expr::Repeat(n.value().to_u32().unwrap(), expr).boxed(),
+
+    #[precedence(level="2")]
+    <op:UnOp> <expr:Expr> => Expr::Unary(op, expr).boxed(),
+
+    #[precedence(level="3")]
+    #[assoc(side="left")]
+    <lhs:Expr> <op:MulOp> <rhs:Expr> => Expr::Binary(op, lhs, rhs).boxed(),
+
+    #[precedence(level="4")]
+    #[assoc(side="left")]
+    <lhs:Expr> <op:AddOp> <rhs:Expr> => Expr::Binary(op, lhs, rhs).boxed(),
+
+    #[precedence(level="5")]
+    #[assoc(side="left")]
+    <lhs:Expr> <op:ShiftOp> <rhs:Expr> => Expr::Binary(op, lhs, rhs).boxed(),
+
+    #[precedence(level="6")]
+    #[assoc(side="left")]
+    <lhs:Expr> <op:RelOp> <rhs:Expr> => Expr::Binary(op, lhs, rhs).boxed(),
+
+    #[precedence(level="7")]
+    #[assoc(side="left")]
+    <lhs:Expr> <op:EqOp> <rhs:Expr> => Expr::Binary(op, lhs, rhs).boxed(),
+
+    #[precedence(level="8")]
+    #[assoc(side="left")]
+    <lhs:Expr> <op:AndOp> <rhs:Expr> => Expr::Binary(op, lhs, rhs).boxed(),
+
+    #[precedence(level="9")]
+    #[assoc(side="left")]
+    <lhs:Expr> <op:XorOp> <rhs:Expr> => Expr::Binary(op, lhs, rhs).boxed(),
+
+    #[precedence(level="10")]
+    #[assoc(side="left")]
+    <lhs:Expr> <op:OrOp> <rhs:Expr> => Expr::Binary(op, lhs, rhs).boxed(),
+
+    #[precedence(level="11")]
+    #[assoc(side="left")]
+    "if" <cond:ExprReset> "{" <then_br:ExprReset> "}" "else" "{" <else_br:Expr> "}" => Expr::If(cond, then_br, else_br).boxed(),
+    "match" <var:ExprReset> "{" <arms:(<ExprReset> "=>" <ExprReset> ",")+> "}" => Expr::Match(var, arms).boxed(),
+}
+
+UnOp: UnaryOp = {
+    "-" => UnaryOp::Neg,
+    "~" => UnaryOp::BitNot,
+    "!" => UnaryOp::Not,
+}
+
+EqOp: BinaryOp = {
+    "==" => BinaryOp::Eq,
+    "!=" => BinaryOp::Ne,
+}
+
+AndOp: BinaryOp = {
+    "&" => BinaryOp::BitAnd,
+    "&&" => BinaryOp::And,
+}
+
+XorOp: BinaryOp = {
+    "^" => BinaryOp::BitXor,
+}
+
+OrOp: BinaryOp = {
+    "|" => BinaryOp::BitOr,
+    "||" => BinaryOp::Or,
+}
+
+RelOp: BinaryOp = {
+    "<" => BinaryOp::Lt,
+    "<=" => BinaryOp::Le,
+    ">" => BinaryOp::Gt,
+    ">=" => BinaryOp::Ge,
+}
+
+ShiftOp: BinaryOp = {
+    "<<" => BinaryOp::LShift,
+    ">>" => BinaryOp::RShift,
+}
+
+AddOp: BinaryOp = {
+    "+" => BinaryOp::Add,
+    "-" => BinaryOp::Sub,
+}
+
+MulOp: BinaryOp = {
+    "*" => BinaryOp::Mul,
+    "/" => BinaryOp::Div,
+    "%" => BinaryOp::Rem,
+}
+
+ExprReset = Expr;
+
+ProcPart: ProcPart = {
+    ConstStmt => {
+        let (name, value) = <>;
+        ProcPart::Const {
+            name,
+            value
+        }
+    },
+    Regfile => ProcPart::Regfile(<>),
+    Module => ProcPart::Module(<>),
+    Flow => ProcPart::Flow(<>),
+}
+
+pub Proc: Proc = ProcPart* => Proc::from_parts(<>);
